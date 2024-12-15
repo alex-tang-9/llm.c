@@ -1,4 +1,5 @@
-# ReadMe
+# The purpose of creating this repo
+I forked this repo because I want to create a video to teach everyone CUDA through a real project. I believe using a project is the most effective way for people to learn new technology. This repo initially sets up a GPT-3 with 1.3 billion parameters, displays the setup results, then uses datasets for training, and finally displays the final results. It encompasses the entire neural network process.
 
 # llm.c
 
