@@ -11,14 +11,14 @@ sure that those parts work out ok and that we do a += as necessary. E.g.,
 the layernorms are connected to the residuals so we += in layernorm backward.
 */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
-#include <time.h>
-#include <assert.h>
+// #include <stdio.h>
+// #include <stdlib.h>
+// #include <math.h>
+// #include <time.h>
+// #include <assert.h>
 #include <float.h>
-#include <string.h>
-#include <unistd.h>
+// #include <string.h>
+// #include <unistd.h>
 
 // GPU / CUDA related
 #include <cublas_v2.h>
@@ -66,6 +66,15 @@ namespace cg = cooperative_groups;
 
 // ----------------------------------------------------------------------------
 // all the kernels
+
+__global__ void printFirstFive(float* array) {
+    int idx = threadIdx.x;
+    printf("%f ", array[idx]);
+    __syncthreads();
+    if (idx == 0){
+        printf("\n");
+    }
+}
 
 __device__ inline float4 add_float4(const float4& a, const float4& b) {
     return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
@@ -808,10 +817,17 @@ void matmul_backward(float* dinp, float* dweight, float* dbias,
                      int B, int T, int C, int OC) {
     float one = 1.0f;
     float zero = 0.0f;
+    printFirstFive<<<1, 5>>>(dinp);
+    printFirstFive<<<1, 5>>>(dout);
+    printFirstFive<<<1, 5>>>(weight);
+    printFirstFive<<<1, 5>>>(inp);
+    cudaDeviceSynchronize();
+    printf("\n#####");
     // backward to input, uses = in the backward pass (set the gradient)
     cublasCheck(cublasSgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, C, B*T, OC, &one, weight, C, dout, OC, &zero, dinp, C));
     // backward to weight, uses += in the backward pass (accumulate the gradient)
     cublasCheck(cublasSgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, C, OC, B*T, &one, inp, C, dout, OC, &one, dweight, C));
+    printFirstFive<<<1, 5>>>(dinp);
     // backward to bias, if given, does a +=
     if (dbias != NULL) {
         const int block_size = 1024;
@@ -819,6 +835,7 @@ void matmul_backward(float* dinp, float* dweight, float* dbias,
         matmul_backward_bias_kernel4<<<grid_size, block_size, block_size * sizeof(float)>>>(dbias, dout, B, T, OC);
         cudaCheck(cudaGetLastError());
     }
+    printFirstFive<<<1, 5>>>(dinp);
 }
 
 void layernorm_backward(float* dinp, float* dweight, float* dbias,
@@ -1272,15 +1289,26 @@ void gpt2_forward(GPT2 *model, int* inputs, int* targets, int B, int T) {
 
         // now do the forward pass
         layernorm_forward(l_ln1, l_ln1_mean, l_ln1_rstd, residual, l_ln1w, l_ln1b, B, T, C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_ln1);
         matmul_forward(scratch, l_ln1, l_qkvw, l_qkvb, B, T, C, 3*C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(scratch);
         attention_forward(l_atty, l_qkvr, l_att, scratch, B, T, C, NH);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_atty);
         matmul_forward(l_attproj, l_atty, l_attprojw, l_attprojb, B, T, C, C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_attproj);
         residual_forward(l_residual2, residual, l_attproj, B*T*C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_residual2);
+        
         layernorm_forward(l_ln2, l_ln2_mean, l_ln2_rstd, l_residual2, l_ln2w, l_ln2b, B, T, C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_ln2);
         matmul_forward(l_fch, l_ln2, l_fcw, l_fcb, B, T, C, 4*C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_fch);
         gelu_forward(l_fch_gelu, l_fch, B*T*4*C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_fch_gelu);
         matmul_forward(l_fcproj, l_fch_gelu, l_fcprojw, l_fcprojb, B, T, 4*C, C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_fcproj);
         residual_forward(l_residual3, l_residual2, l_fcproj, B*T*C);
+        // if (l == 0) printFirstFive<<<1, 5>>>(l_residual3);
     }
 
     residual = acts.residual3 + (L-1) * B * T * C; // last residual is in residual3
@@ -1292,6 +1320,7 @@ void gpt2_forward(GPT2 *model, int* inputs, int* targets, int B, int T) {
         // fused classifier: does the forward pass and first part of the backward pass
         // we're passing dlosses = NULL, which will default them to 1.0f/(B*T), i.e. uniform loss
         fused_classifier3(acts.output, acts.losses, NULL, model->targets, B, T, V, Vp);
+        printFirstFive<<<1, 5>>>(acts.output);
         // for convenience also evaluate the mean loss (TODO re-think this compute+sync point)
         // move the (B,T) losses to CPU
         cudaCheck(cudaMemcpy(model->cpu_losses, acts.losses, B * T * sizeof(float), cudaMemcpyDeviceToHost));
@@ -1304,6 +1333,7 @@ void gpt2_forward(GPT2 *model, int* inputs, int* targets, int B, int T) {
         // if we don't have targets, we don't have loss
         model->mean_loss = -1.0f;
     }
+    printf("model->mean_loss:%f\n", model->mean_loss);
 }
 
 void gpt2_zero_grad(GPT2 *model) {
@@ -1360,12 +1390,18 @@ void gpt2_backward(GPT2 *model) {
     // technically that is a small, inline backward() pass of calculating
     // total, final loss as the mean over all losses over all (B,T) positions in the batch
     // next: backward the classifier matmul
+    // printFirstFive<<<1, 5>>>(acts.output);
+    // printFirstFive<<<1, 5>>>(acts.lnf);
+    // printFirstFive<<<1, 5>>>(params.wte);
     matmul_backward(grads_acts.bt4c, grads.wte, NULL, acts.output, acts.lnf, params.wte, B, T, C, Vp);
+    cudaDeviceSynchronize();
+    printf("\n#####");
+    printFirstFive<<<1, 5>>>(grads.wte);
     // backward the final layernorm
     float* residual = acts.residual3 + (L-1) * B * T * C; // last residual is in residual3
     float* dresidual = grads_acts.residual3; // the main buffer holding the gradient in the backward pass
     layernorm_backward(dresidual, grads.lnfw, grads.lnfb, grads_acts.bt4c, residual, params.lnfw, acts.lnf_mean, acts.lnf_rstd, B, T, C);
-
+    printFirstFive<<<1, 5>>>(dresidual);
     // now backward all the layers
     for (int l = L-1; l >= 0; l--) {
         residual = l == 0 ? acts.encoded : acts.residual3 + (l-1) * B * T * C;
@@ -1419,20 +1455,49 @@ void gpt2_backward(GPT2 *model) {
         // backprop this layer
         matmul_backward(dl_bt4c, dl_fcprojw, dl_fcprojb, dresidual, l_fch_gelu, l_fcprojw, B, T, 4*C, C);
         gelu_backward(dl_bt4c, l_fch, dl_bt4c, B*T*4*C);
+        // if (l==0) printFirstFive<<<1, 5>>>(dl_bt4c);
         matmul_backward(dl_btc, dl_fcw, dl_fcb, dl_bt4c, l_ln2, l_fcw, B, T, C, 4 * C);
+        // if (l==0) printFirstFive<<<1, 5>>>(dl_btc);
         // layernorm backward does += to the dresidual, so it correctly accumulates grad from the MLP block above
         layernorm_backward(dresidual, dl_ln2w, dl_ln2b, dl_btc, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
+        cudaDeviceSynchronize();
+        if (l==L-1) printFirstFive<<<1, 5>>>(dresidual);
+        cudaDeviceSynchronize();
         matmul_backward(dl_btc, dl_attprojw, dl_attprojb, dresidual, l_atty, l_attprojw, B, T, C, C);
         // we more B x T x (4)C buffers. l_atty and l_fch aren't needed anymore at this point, so reuse their memory
         float* buffer_a = l_atty;
         float* buffer_b = l_fch;        // this is B x T x 4C, so even larger than what we need
 
         attention_backward(dl_bt4c, buffer_b, dl_preatt, scratch, buffer_a, dl_btc, l_qkvr, l_att, B, T, C, NH);
+        cudaDeviceSynchronize();
+        printf("\n#####");
+        if (l==L-1) printFirstFive<<<1, 5>>>(dl_qkvw);
+        if (l==L-1) printFirstFive<<<1, 5>>>(dl_qkvb);
+        if (l==L-1) printFirstFive<<<1, 5>>>(dl_bt4c);
+        if (l==L-1) printFirstFive<<<1, 5>>>(l_ln1);
+        if (l==L-1) printFirstFive<<<1, 5>>>(l_qkvw);
+        if (l==L-1) printFirstFive<<<1, 5>>>(dl_btc);
         matmul_backward(dl_btc, dl_qkvw, dl_qkvb, dl_bt4c, l_ln1, l_qkvw, B, T, C, 3 * C);
         // layernorm backward does += to dresidual, so it correctly accumulates gradient for the Attention block above
+        if (l==L-1) printFirstFive<<<1, 5>>>(dl_btc);
         layernorm_backward(dresidual, dl_ln1w, dl_ln1b, dl_btc, residual, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
+        cudaDeviceSynchronize();
+        if (l==L-1) printFirstFive<<<1, 5>>>(dresidual);
+        cudaDeviceSynchronize();
+        break;
     }
+    cudaDeviceSynchronize();
+    printf("\n#####");
+    printFirstFive<<<1, 5>>>(grads.wte);
+    cudaDeviceSynchronize();
+    printFirstFive<<<1, 5>>>(grads.wpe);
+    cudaDeviceSynchronize();
+    printFirstFive<<<1, 5>>>(dresidual);
+    cudaDeviceSynchronize();
     encoder_backward(grads.wte, grads.wpe, dresidual, model->inputs, B, T, C);
+    printFirstFive<<<1, 5>>>(grads.wte);
+    cudaDeviceSynchronize();
+    printf("\n#####\n");
 }
 
 void gpt2_update(GPT2 *model, float learning_rate, float beta1, float beta2, float eps, float weight_decay, int t) {
@@ -1607,10 +1672,10 @@ int main(int argc, char *argv[]) {
     // set up the device
     int deviceIdx = 0;
     cudaCheck(cudaSetDevice(deviceIdx));
+    cublasCheck(cublasCreate(&cublas_handle));
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, deviceIdx);
     // setup cuBLAS and cuBLASLt
-    cublasCheck(cublasCreate(&cublas_handle));
     // TF32 precision is equivalent to torch.set_float32_matmul_precision('high')
     int enable_tf32 = deviceProp.major >= 8 ? 1 : 0;
     cublas_compute_type = enable_tf32 ? CUBLAS_COMPUTE_32F_FAST_TF32 : CUBLAS_COMPUTE_32F;
@@ -1665,56 +1730,56 @@ int main(int argc, char *argv[]) {
     for (int step = 0; step <= train_num_batches; step++) {
         int last_step = step == train_num_batches;
 
-        // once in a while estimate the validation loss
-        if (step % val_loss_every == 0 || last_step) {
-            float val_loss = 0.0f;
-            dataloader_reset(&val_loader);
-            for (int i = 0; i < val_num_batches; i++) {
-                dataloader_next_batch(&val_loader);
-                gpt2_forward(&model, val_loader.inputs, val_loader.targets, B, T);
-                val_loss += model.mean_loss;
-            }
-            val_loss /= val_num_batches;
-            printf("val loss %f\n", val_loss);
-            logger_log_val(&logger, step, val_loss);
-        }
+        // // once in a while estimate the validation loss
+        // if (step % val_loss_every == 0 || last_step) {
+        //     float val_loss = 0.0f;
+        //     dataloader_reset(&val_loader);
+        //     for (int i = 0; i < val_num_batches; i++) {
+        //         dataloader_next_batch(&val_loader);
+        //         gpt2_forward(&model, val_loader.inputs, val_loader.targets, B, T);
+        //         val_loss += model.mean_loss;
+        //     }
+        //     val_loss /= val_num_batches;
+        //     printf("val loss %f\n", val_loss);
+        //     logger_log_val(&logger, step, val_loss);
+        // }
 
-        // once in a while do model inference to print generated text
-        if (step > 0 && step % sample_every == 0 || last_step) {
-            // fill up gen_tokens with the GPT2_EOT, which kicks off the generation
-            for(int i = 0; i < B * T; ++i) {
-                gen_tokens[i] = GPT2_EOT;
-            }
-            // now sample from the model autoregressively
-            printf("generating:\n---\n");
-            for (int t = 1; t < genT; t++) {
-                // note that inference is very wasteful here because for each token
-                // we re-calculate the forward pass for all of (B,T) positions from scratch
-                // but the inference here is just for sanity checking anyway
-                // and we can maybe optimize a bit more later, with careful tests
-                gpt2_forward(&model, gen_tokens, NULL, B, T);
-                // furthermore, below we're only using b=0 (i.e. the first row) of all B rows
-                // we're in principle running B "inference streams" in parallel here
-                // only using position 0 because it's a bit faster (copy less probs from GPU -> CPU)
-                // get the V-dimensional vector probs[0, t-1, :]
-                float* logits = model.acts.output + (t - 1) * model.config.padded_vocab_size;
-                // move probs back to CPU and sample (note we only move the first vocab_size logits, ignoring the padding)
-                cudaCheck(cudaMemcpy(cpu_logits, logits, model.config.vocab_size * sizeof(float), cudaMemcpyDeviceToHost));
-                float coin = random_f32(&rng_state);
-                int next_token = sample_softmax(cpu_logits, model.config.vocab_size, coin);
-                gen_tokens[t] = next_token;
-                // print the generated token, either using the Tokenizer or a fallback
-                if (tokenizer.init_ok) {
-                    const char* token_str = tokenizer_decode(&tokenizer, next_token);
-                    safe_printf(token_str);
-                } else {
-                    // fall back to printing the token id
-                    printf("%d ", next_token);
-                }
-                fflush(stdout);
-            }
-            printf("\n---\n");
-        }
+        // // once in a while do model inference to print generated text
+        // if (step > 0 && step % sample_every == 0 || last_step) {
+        //     // fill up gen_tokens with the GPT2_EOT, which kicks off the generation
+        //     for(int i = 0; i < B * T; ++i) {
+        //         gen_tokens[i] = GPT2_EOT;
+        //     }
+        //     // now sample from the model autoregressively
+        //     printf("generating:\n---\n");
+        //     for (int t = 1; t < genT; t++) {
+        //         // note that inference is very wasteful here because for each token
+        //         // we re-calculate the forward pass for all of (B,T) positions from scratch
+        //         // but the inference here is just for sanity checking anyway
+        //         // and we can maybe optimize a bit more later, with careful tests
+        //         gpt2_forward(&model, gen_tokens, NULL, B, T);
+        //         // furthermore, below we're only using b=0 (i.e. the first row) of all B rows
+        //         // we're in principle running B "inference streams" in parallel here
+        //         // only using position 0 because it's a bit faster (copy less probs from GPU -> CPU)
+        //         // get the V-dimensional vector probs[0, t-1, :]
+        //         float* logits = model.acts.output + (t - 1) * model.config.padded_vocab_size;
+        //         // move probs back to CPU and sample (note we only move the first vocab_size logits, ignoring the padding)
+        //         cudaCheck(cudaMemcpy(cpu_logits, logits, model.config.vocab_size * sizeof(float), cudaMemcpyDeviceToHost));
+        //         float coin = random_f32(&rng_state);
+        //         int next_token = sample_softmax(cpu_logits, model.config.vocab_size, coin);
+        //         gen_tokens[t] = next_token;
+        //         // print the generated token, either using the Tokenizer or a fallback
+        //         if (tokenizer.init_ok) {
+        //             const char* token_str = tokenizer_decode(&tokenizer, next_token);
+        //             safe_printf(token_str);
+        //         } else {
+        //             // fall back to printing the token id
+        //             printf("%d ", next_token);
+        //         }
+        //         fflush(stdout);
+        //     }
+        //     printf("\n---\n");
+        // }
 
         // bit confusing: we want to make sure to eval and sample on 0th iteration
         // but also after the very last iteration. so we loop for step <= train_num_batches
@@ -1726,7 +1791,9 @@ int main(int argc, char *argv[]) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         dataloader_next_batch(&train_loader);
         gpt2_forward(&model, train_loader.inputs, train_loader.targets, B, T);
+        cudaCheck(cudaDeviceSynchronize());
         gpt2_zero_grad(&model);
+        cudaCheck(cudaDeviceSynchronize());
         gpt2_backward(&model);
         gpt2_update(&model, learning_rate, 0.9f, 0.999f, 1e-8f, 0.0f, step+1);
         cudaCheck(cudaDeviceSynchronize()); // finish all CUDA work to get correct precise timings
@@ -1736,6 +1803,7 @@ int main(int argc, char *argv[]) {
         int tokens_per_second = (B * T) / time_elapsed_s;
         printf("step %4d/%d: train loss %f (%f ms, %d tok/s)\n", step + 1, train_num_batches, model.mean_loss, time_elapsed_s * 1000, tokens_per_second);
         logger_log_train(&logger, step, model.mean_loss);
+        break;
     }
     // add a total average, for optimizations that are only mild improvements
     printf("total average iteration time: %f ms\n", total_sum_iteration_time_s / train_num_batches * 1000);

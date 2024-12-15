@@ -1,0 +1,9 @@
+(1)
+Hi, my name is Harry Tang. I’m planning to create a video series that shows how to use CUDA to replicate the GPT-3 architecture. The goal is to help people develop a deeper, more intuitive understanding of GPT and PyTorch. This series won’t cover the basics of linear algebra, calculus, or CUDA theory; instead, it will focus on hands-on projects that teach how to build GPT-3. Through these projects, beginners will improve their understanding of neural networks, how data flows through a computer, and how CUDA running.
+
+We’ll write the code line by line, and I’ll explain why we do it this way. Since this is my first video, there may be some mistakes, so if you spot any, please comment it. I’d really appreciate it! Also, because we’re using C++ code, I can’t run it in real time like you would with Jupyter. So, most of the time, it's explaining part.
+
+(2)
+I’ll break it down into the following sections: 0.Why use cuda, 1. Architecture, 2. Tokenizer, 3. Forward pass, 4. Test results, 5. Backward pass, and 6. Training and final performance. Let's go!
+
+(3)

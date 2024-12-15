@@ -204,7 +204,7 @@ typedef struct {
     // some additional scratch buffers
     floatX* scratch_bt4c;   // (B, T, 4*C)
     floatX* scratch_btc;    // (B, T, C)
-} ActivationTensors;
+} ActivationPointerTensors;
 
 
 struct TensorSpec {
@@ -216,7 +216,7 @@ struct TensorSpec {
 
 #define TENSOR_SPEC(pointer, size) TensorSpec{(void**)(&pointer), (size), dtype_of(pointer)};
 
-void fill_in_activation_sizes(const ActivationTensors* data, TensorSpec (&tensors)[NUM_ACTIVATION_TENSORS], size_t B, size_t T, GPT2Config config, int recompute) {
+void fill_in_activation_sizes(const ActivationPointerTensors* data, TensorSpec (&tensors)[NUM_ACTIVATION_TENSORS], size_t B, size_t T, GPT2Config config, int recompute) {
     size_t Vp = config.padded_vocab_size;
     size_t L = config.num_layers;
     size_t NH = config.num_heads;
@@ -299,7 +299,7 @@ typedef struct {
     float* v_memory;
     float* master_weights;     // is NULL unless fp32 weights is enabled.
     // the activations of the model, and their sizes
-    ActivationTensors acts;
+    ActivationPointerTensors acts;
     TensorSpec acts_specs[NUM_ACTIVATION_TENSORS];
     void* acts_memory;
     // other run state configuration
@@ -676,7 +676,7 @@ void gpt2_forward(GPT2 *model, const int* inputs, size_t B, size_t T) {
 
     // forward pass
     ParameterTensors params = model->params; // for brevity
-    ActivationTensors acts = model->acts;
+    ActivationPointerTensors acts = model->acts;
     encoder_forward(acts.encoded, model->inputs, params.wte, params.wpe, B, T, C, main_stream); // encoding goes into residual[0]
 
     // first layernorm isn't fused
@@ -767,7 +767,7 @@ float gpt2_validate(GPT2 *model, const int* inputs, const int* targets, size_t B
     const size_t Vp = model->config.padded_vocab_size;
 
     NvtxRange classifier_and_loss_range("classifier_and_loss");
-    ActivationTensors acts = model->acts;
+    ActivationPointerTensors acts = model->acts;
     float mean_loss = 0.0f;
     // fused classifier: does the forward pass and first part of the backward pass
     const float dloss = 1.0f / (B * T); // results in the uniform average loss over all elements
@@ -812,7 +812,7 @@ void gpt2_backward_and_reduce(GPT2 *model, int* inputs, const int* targets, int 
 
     ParameterTensors params = model->params; // for brevity
     ParameterTensors grads = model->grads;
-    ActivationTensors acts = model->acts;
+    ActivationPointerTensors acts = model->acts;
 
     // accumulate the losses inside acts.losses, and kick off the backward pass inside the fused classifier
     NvtxRange classifier_and_loss_range("classifier_and_loss");
